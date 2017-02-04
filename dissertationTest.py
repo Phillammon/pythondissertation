@@ -1,7 +1,9 @@
+
 import random
 import copy
+import os
 
-boardsize = 3
+boardsize = 5
 komi = 0.5
 
 class Agent(object):
@@ -51,6 +53,71 @@ class PlayerAgent(Agent):
     def HandleLoss(self,margin):
         print("You lose by a margin of " + str(margin) + " points")
     
+
+
+class NaiveLearningAgent(Agent):
+    def __init__(self, filename="learner.golearn"):
+        self.values = {}
+        self.moves = []
+        self.illegal = []
+        self.filename = filename
+        if os.path.isfile(self.filename):
+            f = open(self.filename, "r")
+            for line in f:
+                lst = line.split()
+                self.values[lst[0]] = lst[1:]
+            f.close()
+    def RequestMove(self, gamestate, board):
+        if gamestate in self.values.keys():
+            self.moves.append((gamestate, random.randint(0,boardsize*boardsize))) #TODO: MAKE THIS ACTUALLY WORK
+        else:
+            self.moves.append((gamestate, random.randint(0,boardsize*boardsize)))
+        return self.moves[-1][1]
+    def HandleVictory(self, margin):
+        for move in self.moves:
+            if not move[0] in self.values.keys():
+                newlist = []
+                for i in range(boardsize * boardsize + 1):
+                    newlist.append("0")
+                self.values[move[0]] = newlist
+            self.values[move[0]][move[1]] = str(int(self.values[move[0]][move[1]]) + 1)
+        for move in self.illegal:
+            if not move[0] in self.values.keys():
+                newlist = []
+                for i in range(boardsize * boardsize + 1):
+                    newlist.append("0")
+                self.values[move[0]] = newlist
+            self.values[move[0]][move[1]] = "N"
+        self.UpdateFile()
+    def HandleLoss(self,margin):
+        for move in self.moves:
+            if not move[0] in self.values.keys():
+                newlist = []
+                for i in range(boardsize * boardsize + 1):
+                    newlist.append("0")
+                self.values[move[0]] = newlist
+            self.values[move[0]][move[1]] = str(int(self.values[move[0]][move[1]]) - 1)
+        for move in self.illegal:
+            if not move[0] in self.values.keys():
+                newlist = []
+                for i in range(boardsize * boardsize + 1):
+                    newlist.append("0")
+                self.values[move[0]] = newlist
+            self.values[move[0]][move[1]] = "N"
+        self.UpdateFile()
+    def UpdateFile(self):
+        f = open(self.filename, "w")
+        for key in self.values.keys():
+            linetowrite = key
+            for item in self.values[key]:
+                linetowrite += " " + item
+            linetowrite += "\n"
+            f.write(linetowrite)
+        f.close()
+    def LastMoveIllegal(self):
+        self.illegal.append(self.moves.pop())
+
+
 class GoBoard(object):
     boardstate = []
     tempstate = []
@@ -276,5 +343,6 @@ class GoBoard(object):
                 linestr = "| "
                 print(linestr*boardsize)
     
-board = GoBoard(Agent(), Agent())
-board.PlayGame(True)
+for i in range(100):
+    board = GoBoard(NaiveLearningAgent(), Agent())
+    board.PlayGame(False)

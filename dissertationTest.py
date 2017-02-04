@@ -1,7 +1,7 @@
 import random
 import copy
 
-boardsize = 5
+boardsize = 3
 komi = 0.5
 
 class Agent(object):
@@ -43,7 +43,7 @@ class PlayerAgent(Agent):
                     choicey = -1
             except:
                 print("No number recognised")
-        return 5*(choicey-1) + (choicex-1)
+        return boardsize*(choicey-1) + (choicex-1)
     def LastMoveIllegal(self):
         print("That is not a legal play")
     def HandleVictory(self, margin):
@@ -263,9 +263,9 @@ class GoBoard(object):
         for i in range(boardsize):
             linestring = ""
             for j in range(boardsize):
-                if self.boardstate[5*i+j] == 1:
+                if self.boardstate[boardsize*i+j] == 1:
                     linestring += "o"
-                elif self.boardstate[5*i+j] == -1:
+                elif self.boardstate[boardsize*i+j] == -1:
                     linestring += "+"
                 else:
                     linestring += " "
@@ -273,7 +273,8 @@ class GoBoard(object):
                     linestring += "-"
             print(linestring)
             if i != boardsize-1:
-                print("| | | | |")
+                linestr = "| "
+                print(linestr*boardsize)
     
-board = GoBoard(PlayerAgent(), Agent())
+board = GoBoard(Agent(), Agent())
 board.PlayGame(True)

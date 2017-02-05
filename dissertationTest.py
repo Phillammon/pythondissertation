@@ -3,7 +3,7 @@ import random
 import copy
 import os
 
-boardsize = 5
+boardsize = 3
 komi = 0.5
 
 class Agent(object):
@@ -16,6 +16,10 @@ class Agent(object):
     def HandleLoss(self,margin):
         pass
     def LastMoveIllegal(self):
+        pass
+    def Reset(self):
+        pass
+    def FinishGames(self):
         pass
 
 class PlayerAgent(Agent):
@@ -59,7 +63,6 @@ class NaiveLearningAgent(Agent):
     def __init__(self, filename="learner.golearn"):
         self.values = {}
         self.moves = []
-        self.illegal = []
         self.filename = filename
         if os.path.isfile(self.filename):
             f = open(self.filename, "r")
@@ -69,7 +72,28 @@ class NaiveLearningAgent(Agent):
             f.close()
     def RequestMove(self, gamestate, board):
         if gamestate in self.values.keys():
-            self.moves.append((gamestate, random.randint(0,boardsize*boardsize))) #TODO: MAKE THIS ACTUALLY WORK
+            valuelist = self.values[gamestate]
+            lowest = 0
+            highest = 1
+            for value in valuelist:
+                if value != "N":
+                    if int(value) < lowest:
+                        lowest = int(value)
+                    if int(value) > highest:
+                        highest = int(value)
+            delta = -lowest + highest
+            rolllist = []
+            rollno = 0
+            for i in range(boardsize*boardsize+1):
+                if valuelist[i] != "N":
+                    rollno += int(valuelist[i])+delta
+                    rolllist.append((i, rollno))
+            roll = random.randint(0, rollno)
+            choice = 0
+            while rolllist[choice][1] < roll:
+                choice += 1
+            choice = rolllist[choice][0]
+            self.moves.append((gamestate, choice))
         else:
             self.moves.append((gamestate, random.randint(0,boardsize*boardsize)))
         return self.moves[-1][1]
@@ -81,14 +105,6 @@ class NaiveLearningAgent(Agent):
                     newlist.append("0")
                 self.values[move[0]] = newlist
             self.values[move[0]][move[1]] = str(int(self.values[move[0]][move[1]]) + 1)
-        for move in self.illegal:
-            if not move[0] in self.values.keys():
-                newlist = []
-                for i in range(boardsize * boardsize + 1):
-                    newlist.append("0")
-                self.values[move[0]] = newlist
-            self.values[move[0]][move[1]] = "N"
-        self.UpdateFile()
     def HandleLoss(self,margin):
         for move in self.moves:
             if not move[0] in self.values.keys():
@@ -97,13 +113,7 @@ class NaiveLearningAgent(Agent):
                     newlist.append("0")
                 self.values[move[0]] = newlist
             self.values[move[0]][move[1]] = str(int(self.values[move[0]][move[1]]) - 1)
-        for move in self.illegal:
-            if not move[0] in self.values.keys():
-                newlist = []
-                for i in range(boardsize * boardsize + 1):
-                    newlist.append("0")
-                self.values[move[0]] = newlist
-            self.values[move[0]][move[1]] = "N"
+    def FinishGames(self):
         self.UpdateFile()
     def UpdateFile(self):
         f = open(self.filename, "w")
@@ -115,8 +125,15 @@ class NaiveLearningAgent(Agent):
             f.write(linetowrite)
         f.close()
     def LastMoveIllegal(self):
-        self.illegal.append(self.moves.pop())
-
+        move = self.moves.pop()
+        if not move[0] in self.values.keys():
+            newlist = []
+            for i in range(boardsize * boardsize + 1):
+                newlist.append("0")
+            self.values[move[0]] = newlist
+        self.values[move[0]][move[1]] = "N"
+    def Reset(self):
+        self.moves = []
 
 class GoBoard(object):
     boardstate = []
@@ -325,6 +342,8 @@ class GoBoard(object):
         output = ""
         for i in range(boardsize*boardsize):
             output += str(self.boardstate[i]+1)
+        if self.passflag:
+            output += "P"
         return output
     def PrintBoard(self):
         for i in range(boardsize):
@@ -342,7 +361,26 @@ class GoBoard(object):
             if i != boardsize-1:
                 linestr = "| "
                 print(linestr*boardsize)
-    
-for i in range(100):
-    board = GoBoard(NaiveLearningAgent(), Agent())
+        if self.passflag:
+            print("Passing will end the game")
+    def ResetBoard(self):
+        self.boardstate = []
+        self.boardstate = []
+        self.tempstate = []
+        self.passflag = False
+        self.activescore = 0
+        self.inactivescore = 0
+        self.InitBoardstate()
+        for agent in self.agents:
+            agent.Reset()
+    def FinishGames(self):
+        for agent in self.agents:
+            agent.FinishGames()
+
+
+board = GoBoard(NaiveLearningAgent(), Agent())    
+for i in range(1000):
     board.PlayGame(False)
+    board.ResetBoard()
+    print("Game " + str(i) + " complete")
+board.FinishGames()

@@ -60,10 +60,11 @@ class PlayerAgent(Agent):
 
 
 class NaiveLearningAgent(Agent):
-    def __init__(self, filename="learner.golearn"):
+    def __init__(self, exploration=1.0, filename="learner.golearn"):
         self.values = {}
         self.moves = []
         self.filename = filename
+        self.exploration = exploration
         if os.path.isfile(self.filename):
             f = open(self.filename, "r")
             for line in f:
@@ -74,14 +75,14 @@ class NaiveLearningAgent(Agent):
         if gamestate in self.values.keys():
             valuelist = self.values[gamestate]
             lowest = 0
-            highest = 1
+            highest = 0
             for value in valuelist:
                 if value != "N":
                     if int(value) < lowest:
                         lowest = int(value)
                     if int(value) > highest:
                         highest = int(value)
-            delta = -lowest + highest
+            delta = -lowest + self.exploration*highest + 1
             rolllist = []
             rollno = 0
             for i in range(boardsize*boardsize+1):
@@ -378,8 +379,8 @@ class GoBoard(object):
             agent.FinishGames()
 
 
-board = GoBoard(NaiveLearningAgent(), Agent())    
-for i in range(1000):
+board = GoBoard(NaiveLearningAgent(0, "learner.golearn"), Agent())    
+for i in range(10000):
     board.PlayGame(False)
     board.ResetBoard()
     print("Game " + str(i) + " complete")

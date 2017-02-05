@@ -82,7 +82,7 @@ class NaiveLearningAgent(Agent):
                         lowest = int(value)
                     if int(value) > highest:
                         highest = int(value)
-            delta = -lowest + self.exploration*highest + 1
+            delta = int(-lowest + self.exploration*highest + 1)
             rolllist = []
             rollno = 0
             for i in range(boardsize*boardsize+1):
@@ -379,7 +379,7 @@ class GoBoard(object):
             agent.FinishGames()
 
 
-board = GoBoard(NaiveLearningAgent(0, "learner.golearn"), Agent())    
+board = GoBoard(NaiveLearningAgent(0.3, "learner.golearn"), NaiveLearningAgent(0.3, "learner2nd.golearn"))    
 for i in range(10000):
     board.PlayGame(False)
     board.ResetBoard()

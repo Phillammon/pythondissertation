@@ -468,3 +468,8 @@ newnet, f = learner.learn()
 
 print newnet
 print f
+
+
+from pylab import plot, show
+plot(res)
+show()

@@ -12,6 +12,7 @@ from pybrain.utilities import drawGibbs
 from pybrain.optimization import ES
 from pybrain.utilities import storeCallResults
 from pybrain.structure.evolvables.cheaplycopiable import CheaplyCopiable
+from pybrain.rl.agents.agent import Agent
 
 from scipy import zeros, ones
 
@@ -58,6 +59,8 @@ class GoGame(TwoPlayerGame):
                 output += [0, 1]
             else:
                 output += [0, 0]
+        output += [0, 0]
+        return output
     def playGame(self, p1, p2):
         gameover = False
         currplayer = 0 if p1.colour == self.BLACK else 1
@@ -302,7 +305,7 @@ class GoGame(TwoPlayerGame):
 # --------------------------
 
 
-class GoPlayer():
+class GoPlayer(Agent):
     def __init__(self, game, color = GoGame.BLACK, **args):
         self.game = game
         self.color = color

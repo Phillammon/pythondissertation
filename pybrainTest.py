@@ -6,9 +6,12 @@ import pybrain.rl.environments.twoplayergames
 from pybrain.rl.environments.episodic import EpisodicTask
 from inspect import isclass
 from pybrain.utilities import  Named
-from pybrain.rl.environments.twoplayergames import CaptureGame
+from pybrain.rl.environments.twoplayergames.twoplayergame import TwoPlayerGame
 from pybrain.structure.modules.module import Module
 from pybrain.utilities import drawGibbs
+from pybrain.optimization import ES
+from pybrain.utilities import storeCallResults
+from pybrain.structure.evolvables.cheaplycopiable import CheaplyCopiable
 
 from scipy import zeros, ones
 
@@ -38,10 +41,11 @@ class GoGame(TwoPlayerGame):
         TwoPlayerGame.reset(self)
         self.board = []
         for i in range(self.spaces):
-            self.board.append = 0
+            self.board.append(0)
         self.winner = None
         self.blackScore = 0
         self.whiteScore = 0
+        self.passflag = False
 
     def getSensors(self):
         return self.board
@@ -56,7 +60,7 @@ class GoGame(TwoPlayerGame):
                 output += [0, 0]
     def playGame(self, p1, p2):
         gameover = False
-        currplayer = 0 if p1.colour = selfBLACK else 1
+        currplayer = 0 if p1.colour == self.BLACK else 1
         players = [p1, p2]
         p1.game = self
         p2.game = self
@@ -155,7 +159,7 @@ class GoGame(TwoPlayerGame):
                         if (self.board[i - self.size] == self.BLACK or self.board[i - self.size] == self.BLACK_SAFE or self.board[i - self.size] == self.DISPUTED_TERRITORY):
                             self.board[i] = self.DISPUTED_TERRITORY
                             flag = True
-        for i in self.spaces:
+        for i in range(self.spaces):
             if self.board[i] == self.BLACK_SAFE:
                 self.blackScore += 1
             if self.board[i] == self.WHITE_SAFE:
@@ -204,7 +208,7 @@ class GoGame(TwoPlayerGame):
                             flag = True
         scored = 0
         capflag = False
-        for i in self.spaces:
+        for i in range(self.spaces):
             if tempboard[i] == -colour * 2:
                 tempboard[i] = -colour
             elif tempboard[i] == -colour:
@@ -269,7 +273,7 @@ class GoGame(TwoPlayerGame):
                             flag = True
         scored = 0
         capflag = False
-        for i in self.spaces:
+        for i in range(self.spaces):
             if tempboard[i] == -colour * 2:
                 tempboard[i] = -colour
             elif tempboard[i] == -colour:
@@ -302,7 +306,7 @@ class GoPlayer():
     def __init__(self, game, color = GoGame.BLACK, **args):
         self.game = game
         self.color = color
-        self.setArgs(**args)
+        #self.setArgs(**args)
 class RandomGoPlayer(GoPlayer):
     def getAction(self):
         return [self.color, random.choice(self.game.getLegals(self.color))]
@@ -314,7 +318,7 @@ class ModuleDecidingPlayer(RandomGoPlayer):
     # if the selection is not greedy, use Gibbs-sampling with this temperature
     temperature = 1.
     def __init__(self, module, *args, **kwargs):
-        RandomGoPlayer.__init__(self, *args, **kwargs)
+        #RandomGoPlayer.__init__(self, *args, **kwargs)
         self.module = module
         if self.greedySelection:
             self.temperature = 0.
@@ -350,4 +354,117 @@ class ModuleDecidingPlayer(RandomGoPlayer):
         return drawn
     def integrateObservation(self, obs = None):
         pass
-    
+
+# ----------------------
+# TASK CLASS
+# ----------------------
+
+class GoGameTask(EpisodicTask, Named):
+    """ The task of winning the maximal number of Go games against a fixed opponent. """
+    # first game, opponent is black
+    opponentStart = True
+    # on subsequent games, starting players are alternating
+    alternateStarting = False
+    # numerical reward value attributed to winning
+    winnerReward = 1.
+    # average over some games for evaluations
+    averageOverGames = 25
+    noisy = True
+    def __init__(self, size, opponent = None, **args):
+        EpisodicTask.__init__(self, GoGame(size))
+        self.setArgs(**args)
+        if opponent == None:
+            opponent = RandomGoPlayer(self.env)
+        elif isclass(opponent):
+            # assume the agent can be initialized without arguments then.
+            opponent = opponent(self.env)
+        else:
+            opponent.game = self.env
+        if not self.opponentStart:
+            opponent.color = GoGame.WHITE
+        self.opponent = opponent
+        self.reset()
+    def reset(self):
+        self.switched = False
+        EpisodicTask.reset(self)
+        if self.opponent.color == GoGame.BLACK:
+            # first move by opponent
+            EpisodicTask.performAction(self, self.opponent.getAction())
+    def isFinished(self):
+        res = self.env.gameOver()
+        if res and self.alternateStarting and not self.switched:
+            # alternate starting player
+            self.opponent.color *= -1
+            self.switched = True
+        return res
+    def getReward(self):
+        """ Final positive reward for winner, negative for loser. """
+        if self.isFinished():
+            win = (self.env.winner != self.opponent.color)
+            moves = self.env.movesDone
+            res = self.winnerReward
+            if not win:
+                res *= -1
+            if self.alternateStarting and self.switched:
+                # opponent color has been inverted after the game!
+                res *= -1
+            return res
+        else:
+            return 0
+    def performAction(self, action):
+        EpisodicTask.performAction(self, action)
+        if not self.isFinished():
+            EpisodicTask.performAction(self, self.opponent.getAction())
+    def f(self, x):
+        """ If a module is given, wrap it into a ModuleDecidingAgent before evaluating it.
+        Also, if applicable, average the result over multiple games. """
+        if isinstance(x, Module):
+            agent = ModuleDecidingPlayer(x, self.env, greedySelection = True)
+        elif isinstance(x, GoPlayer):
+            agent = x
+        else:
+            raise NotImplementedError('Missing implementation for '+x.__class__.__name__+' evaluation')
+        res = 0
+        agent.game = self.env
+        self.opponent.game = self.env
+        for _ in range(self.averageOverGames):
+            agent.color = -self.opponent.color
+            x = EpisodicTask.f(self, agent)
+            res += x
+        return res / float(self.averageOverGames)
+
+
+
+
+# -----------------------------
+# PROVING IT WORKS HOPEFULLY
+# -----------------------------
+
+size = 5
+simplenet = False
+task = GoGameTask(size, averageOverGames = 40, opponent = RandomGoPlayer)
+
+# keep track of evaluations for plotting
+res = storeCallResults(task)
+
+if simplenet:
+    # simple network
+    from pybrain.tools.shortcuts import buildNetwork
+    from pybrain import SigmoidLayer
+    net = buildNetwork(task.outdim, task.indim, outclass = SigmoidLayer)
+else:
+    # specialized mdrnn variation
+    # this game has been based off the capturegame code- the same network *should* work here too
+    from pybrain.structure.networks.custom.capturegame import CaptureGameNetwork
+    net = CaptureGameNetwork(size = size, hsize = 2, simpleborders = True)
+
+net = CheaplyCopiable(net)
+print net.name, 'has', net.paramdim, 'trainable parameters.'
+
+learner = ES(task, net, mu = 5, lambada = 5,
+             verbose = True, evaluatorIsNoisy = True,
+             maxEvaluations = 50)
+newnet, f = learner.learn()
+
+print newnet
+print f

@@ -3,7 +3,7 @@ import random
 import copy
 import os
 
-boardsize = 3
+boardsize = 5
 komi = 0.5
 
 class Agent(object):
@@ -379,9 +379,8 @@ class GoBoard(object):
             agent.FinishGames()
 
 
-board = GoBoard(NaiveLearningAgent(0.3, "learner.golearn"), NaiveLearningAgent(0.3, "learner2nd.golearn"))    
-for i in range(10000):
+board = GoBoard(NaiveLearningAgent(0.3, "naivelearner.golearn"), Agent())    
+for i in range(25000):
     board.PlayGame(False)
     board.ResetBoard()
-    print("Game " + str(i) + " complete")
 board.FinishGames()

@@ -3,6 +3,7 @@ import random
 import copy
 import os
 import pybrain.rl.environments.twoplayergames
+import sys, time
 from pybrain.rl.environments.episodic import EpisodicTask
 from inspect import isclass
 from pybrain.utilities import  Named
@@ -13,8 +14,17 @@ from pybrain.optimization import ES
 from pybrain.utilities import storeCallResults
 from pybrain.structure.evolvables.cheaplycopiable import CheaplyCopiable
 from pybrain.rl.agents.agent import Agent
+from pybrain import SharedFullConnection, MotherConnection, MDLSTMLayer, IdentityConnection
+from pybrain import ModuleMesh, LinearLayer, TanhLayer, SigmoidLayer
+from pybrain.structure.networks import BorderSwipingNetwork
+from pybrain.rl.learners.valuebased import ActionValueTable
+from pybrain.rl.agents import LearningAgent
+from pybrain.rl.learners import Q, SARSA
+from pybrain.rl.experiments import Experiment
+from pybrain.rl.environments import Task
 
 from scipy import zeros, ones
+import pylab
 
 # ----------------------
 # ENVIRONMENT CLASS
@@ -37,6 +47,14 @@ class GoGame(TwoPlayerGame):
     @property
     def spaces(self):
         return self.size ** 2
+        
+    @property
+    def indim(self):
+        return self.spaces + 1
+        
+    @property
+    def outdim(self):
+        return self.indim * 2
         
     def reset(self):
         TwoPlayerGame.reset(self)
@@ -108,22 +126,22 @@ class GoGame(TwoPlayerGame):
                             self.board[i] = self.WHITE_SAFE
                             flag = True
                     if (i % self.size != 0):
-                        if (self.board[i - 1] == self.BLACK or self.board[i - 1] == BLACK_SAFE):
-                            self.board[i] = BLACK_SAFE
+                        if (self.board[i - 1] == self.BLACK or self.board[i - 1] == self.BLACK_SAFE):
+                            self.board[i] = self.BLACK_SAFE
                             flag = True
                         if (self.board[i - 1] == self.WHITE or self.board[i - 1] == self.WHITE_SAFE):
                             self.board[i] = self.WHITE_SAFE
                             flag = True
                     if (i + self.size < self.spaces):
-                        if (self.board[i + self.size] == self.BLACK or self.board[i + self.size] == BLACK_SAFE):
-                            self.board[i] = BLACK_SAFE
+                        if (self.board[i + self.size] == self.BLACK or self.board[i + self.size] == self.BLACK_SAFE):
+                            self.board[i] = self.BLACK_SAFE
                             flag = True
                         if (self.board[i + self.size] == self.WHITE or self.board[i + self.size] == self.WHITE_SAFE):
                             self.board[i] = self.WHITE_SAFE
                             flag = True
                     if (i - self.size >= 0):
-                        if (self.board[i - self.size] == self.BLACK or self.board[i - self.size] == BLACK_SAFE):
-                            self.board[i] = BLACK_SAFE
+                        if (self.board[i - self.size] == self.BLACK or self.board[i - self.size] == self.BLACK_SAFE):
+                            self.board[i] = self.BLACK_SAFE
                             flag = True
                         if (self.board[i - self.size] == self.WHITE or self.board[i - self.size] == self.WHITE_SAFE):
                             self.board[i] = self.WHITE_SAFE
@@ -299,7 +317,6 @@ class GoGame(TwoPlayerGame):
     def gameOver(self):
         return self.winner != None
 
-
 # --------------------------
 # PLAYER CLASSES
 # --------------------------
@@ -404,7 +421,6 @@ class GoGameTask(EpisodicTask, Named):
         """ Final positive reward for winner, negative for loser. """
         if self.isFinished():
             win = (self.env.winner != self.opponent.color)
-            moves = self.env.movesDone
             res = self.winnerReward
             if not win:
                 res *= -1
@@ -443,23 +459,19 @@ class GoGameTask(EpisodicTask, Named):
 # PROVING IT WORKS HOPEFULLY
 # -----------------------------
 
-size = 5
-simplenet = False
-task = GoGameTask(size, averageOverGames = 40, opponent = RandomGoPlayer)
 
+pylab.gray()
+pylab.ion()
+
+size = 5
+task = GoGameTask(size, averageOverGames = 200, opponent = RandomGoPlayer)
+"""
 # keep track of evaluations for plotting
 res = storeCallResults(task)
 
-if simplenet:
-    # simple network
-    from pybrain.tools.shortcuts import buildNetwork
-    from pybrain import SigmoidLayer
-    net = buildNetwork(task.outdim, task.indim, outclass = SigmoidLayer)
-else:
-    # specialized mdrnn variation
-    # this game has been based off the capturegame code- the same network *should* work here too
-    from pybrain.structure.networks.custom.capturegame import CaptureGameNetwork
-    net = CaptureGameNetwork(size = size, hsize = 2, simpleborders = True)
+from pybrain.tools.shortcuts import buildNetwork
+from pybrain import SigmoidLayer
+net = buildNetwork(task.outdim, task.indim, outclass = SigmoidLayer)
 
 net = CheaplyCopiable(net)
 print net.name, 'has', net.paramdim, 'trainable parameters.'
@@ -471,8 +483,19 @@ newnet, f = learner.learn()
 
 print newnet
 print f
+"""
 
+controller = ActionValueTable(3**25 * 2, 26)
+controller.initialize(1.)
 
-from pylab import plot, show
-plot(res)
-show()
+learner = Q()
+agent = LearningAgent(controller, learner)
+experiment = Experiment(task, agent)
+
+while True:
+    experiment.doInteractions(100)
+    agent.learn()
+    agent.reset()
+
+    pylab.pcolor(controller.params.reshape(3**25 * 2, 26).max(1).reshape(9,9))
+    pylab.draw()

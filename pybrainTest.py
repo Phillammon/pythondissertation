@@ -518,6 +518,8 @@ pylab.ion()
 size = 5
 
 #"""
+
+print("Starting")
 task = GoGameTask(size, averageOverGames = 200, opponent = RandomGoPlayer)
 
 # keep track of evaluations for plotting
@@ -561,11 +563,13 @@ print learner"""
 game = GoGame(5)
 randAgent = RandomGoPlayer(game, name= "Random")
 netAgent = ModuleDecidingPlayer(newnet, game, name = 'net')
-netAgentGreedy = ModuleDecidingPlayer(newnet, game, name = 'greedy', greedySelection = True)"""
+netAgentGreedy = ModuleDecidingPlayer(newnet, game, name = 'greedy', greedySelection = True)
+"""
 net2Agent = ModuleDecidingPlayer(newnet2, game, name = 'net')
 net2AgentGreedy = ModuleDecidingPlayer(newnet2, game, name = 'greedy', greedySelection = True)"""
 
-agents = [randAgent, netAgent, netAgentGreedy""", net2Agent, net2AgentGreedy"""]
+agents = [randAgent, netAgent, netAgentGreedy]
+#agents = [randAgent, netAgent, netAgentGreedy, net2Agent, net2AgentGreedy]
 
 print
 print 'Starting tournament...'

@@ -18,10 +18,11 @@ from pybrain import SharedFullConnection, MotherConnection, MDLSTMLayer, Identit
 from pybrain import ModuleMesh, LinearLayer, TanhLayer, SigmoidLayer
 from pybrain.structure.networks import BorderSwipingNetwork
 from pybrain.rl.learners.valuebased import ActionValueTable
-from pybrain.rl.agents import LearningAgent
+from pybrain.rl.agents import LearningAgent, OptimizationAgent
 from pybrain.rl.learners import Q, SARSA
-from pybrain.rl.experiments import Experiment
+from pybrain.rl.experiments import EpisodicExperiment
 from pybrain.rl.environments import Task
+from pybrain.rl.experiments.tournament import Tournament
 
 from scipy import zeros, ones
 import pylab
@@ -44,6 +45,9 @@ class GoGame(TwoPlayerGame):
         self.komi = komi
         self.reset()
         
+    @property
+    def startcolor(self):
+        return self.BLACK
     @property
     def spaces(self):
         return self.size ** 2
@@ -91,6 +95,7 @@ class GoGame(TwoPlayerGame):
                 currplayer = 1 - currplayer
     
     def doMove(self, colour, move):
+        #print(self.board)
         if move == self.spaces:
             self.handlePass()
             return True
@@ -359,11 +364,11 @@ class ModuleDecidingPlayer(RandomGoPlayer):
     def _legalizeIt(self, a):
         """ draw index from an array of values, filtering out illegal moves. """
         if not min(a) >= 0:
-            print a
-            print min(a)
-            print self.module.params
-            print self.module.inputbuffer
-            print self.module.outputbuffer
+            #print a
+            #print min(a)
+            #print self.module.params
+            #print self.module.inputbuffer
+            #print self.module.outputbuffer
             raise Exception('Non-positive value in array?')
         legals = self.game.getLegals(self.color)
         vals = ones(len(a))*(-100)*(1+self.temperature)
@@ -452,8 +457,55 @@ class GoGameTask(EpisodicTask, Named):
             res += x
         return res / float(self.averageOverGames)
 
+# -----------------------------
+# ACTION VALUE TABLE CLASS
+# -----------------------------
 
+class GoActionValueTable(Module):
+    def __init__(self, numStates, numActions, name=None):
+        Module.__init__(self, 25, 1, name)
+        self.numRows = numStates
+        self.numColumns = numActions
+        self.actionvalues = {}
+            
 
+    @property
+    def numActions(self):
+        return self.numColumns
+
+    def _forwardImplementation(self, inbuf, outbuf):
+        """ Take a vector of length 1 (the state coordinate) and return
+            the action with the maximum value over all actions for this state.
+        """
+        outbuf[0] = self.getMaxAction(inbuf[0])
+
+    def getMaxAction(self, state):
+        """ Return the action with the maximal value for the given state. """
+        self._initState(state)
+        maxes = []
+        statelist = self.actionvalues[state]
+        max = -1.0
+        for i in range(self.numColumns):
+            if statelist[i] > max:
+                maxes = []
+                max = statelist[i]
+            if statelist[i] == max:
+                maxes.append(i)
+        action = random.choice(maxes)
+        return action
+
+    def getActionValues(self, state):
+        self._initState(state)
+        return self.actionvalues[state]
+
+    def initialize(self, value=0.0):
+        self.basestate = []
+        for i in range(self.numColumns):
+            self.basestate.append(value)
+    
+    def _initState(self, state):
+        if not state in self.actionvalues:
+            self.actionvalues[state] = copy.copy(self.basestate)
 
 # -----------------------------
 # PROVING IT WORKS HOPEFULLY
@@ -464,8 +516,10 @@ pylab.gray()
 pylab.ion()
 
 size = 5
+
+#"""
 task = GoGameTask(size, averageOverGames = 200, opponent = RandomGoPlayer)
-"""
+
 # keep track of evaluations for plotting
 res = storeCallResults(task)
 
@@ -483,19 +537,61 @@ newnet, f = learner.learn()
 
 print newnet
 print f
+print learner
 """
+task = GoGameTask(size, averageOverGames = 2000, opponent = RandomGoPlayer)
 
-controller = ActionValueTable(3**25 * 2, 26)
+# keep track of evaluations for plotting
+res = storeCallResults(task)
+
+net2 = buildNetwork(task.outdim, task.indim, outclass = SigmoidLayer)
+
+net2 = CheaplyCopiable(net)
+print net.name, 'has', net.paramdim, 'trainable parameters.'
+
+learner = ES(task, net2, mu = 5, lambada = 5,
+             verbose = True, evaluatorIsNoisy = True,
+             maxEvaluations = 50)
+newnet2, f = learner.learn()
+
+print newnet
+print f
+print learner"""
+
+game = GoGame(5)
+randAgent = RandomGoPlayer(game, name= "Random")
+netAgent = ModuleDecidingPlayer(newnet, game, name = 'net')
+netAgentGreedy = ModuleDecidingPlayer(newnet, game, name = 'greedy', greedySelection = True)"""
+net2Agent = ModuleDecidingPlayer(newnet2, game, name = 'net')
+net2AgentGreedy = ModuleDecidingPlayer(newnet2, game, name = 'greedy', greedySelection = True)"""
+
+agents = [randAgent, netAgent, netAgentGreedy""", net2Agent, net2AgentGreedy"""]
+
+print
+print 'Starting tournament...'
+tourn = Tournament(game, agents)
+tourn.organize(50)
+print tourn
+
+
+
+"""
+task = GoGameTask(size, averageOverGames = 200, opponent = RandomGoPlayer)
+
+controller = GoActionValueTable(3**25 * 2, 26)
+#Initialize at 1 to encourage exploration
 controller.initialize(1.)
 
-learner = Q()
+learner = Q(task)
 agent = LearningAgent(controller, learner)
-experiment = Experiment(task, agent)
+experiment = EpisodicExperiment(task, agent)
 
+i=0
 while True:
-    experiment.doInteractions(100)
-    agent.learn()
+    i += 1
+    print(str(i) + "x")
+    experiment.doEpisodes(2)
+    agent.learn(2)
     agent.reset()
 
-    pylab.pcolor(controller.params.reshape(3**25 * 2, 26).max(1).reshape(9,9))
-    pylab.draw()
+"""

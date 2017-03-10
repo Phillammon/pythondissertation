@@ -1,38 +1,23 @@
-print("Begin")
+
+from __future__ import print_function
+
 import random
 import copy
 import os
-import pybrain.rl.environments.twoplayergames
 import sys, time
-from pybrain.rl.environments.episodic import EpisodicTask
-from inspect import isclass
-from pybrain.utilities import  Named
-from pybrain.rl.environments.twoplayergames.twoplayergame import TwoPlayerGame
-from pybrain.structure.modules.module import Module
+import cPickle
 from pybrain.utilities import drawGibbs
-from pybrain.optimization import ES
-from pybrain.utilities import storeCallResults
-from pybrain.structure.evolvables.cheaplycopiable import CheaplyCopiable
-from pybrain.rl.agents.agent import Agent
-from pybrain import SharedFullConnection, MotherConnection, MDLSTMLayer, IdentityConnection
-from pybrain import ModuleMesh, LinearLayer, TanhLayer, SigmoidLayer
-from pybrain.structure.networks import BorderSwipingNetwork
-from pybrain.rl.learners.valuebased import ActionValueTable
-from pybrain.rl.agents import LearningAgent, OptimizationAgent
-from pybrain.rl.learners import Q, SARSA
-from pybrain.rl.experiments import EpisodicExperiment
-from pybrain.rl.environments import Task
-from pybrain.rl.experiments.tournament import Tournament
-from pybrain.utilities import fListToString
-
 from scipy import zeros, ones
-import pylab
+
+
+learning = 0.2
+discount = 0.9
 
 # ----------------------
 # ENVIRONMENT CLASS
 # ----------------------
 
-class GoGame(TwoPlayerGame):
+class GoGame():
     """Go Game using simplified rules for Ko and for endgame territory calculation"""
     EMPTY = 0
     BLACK = 1
@@ -45,32 +30,27 @@ class GoGame(TwoPlayerGame):
         self.size = size
         self.komi = komi
         self.reset()
-        
     @property
-    def startcolor(self):
+    def startcolour(self):
         return self.BLACK
     @property
     def spaces(self):
         return self.size ** 2
-        
     @property
     def indim(self):
         return self.spaces + 1
-        
     @property
     def outdim(self):
         return self.indim * 2
-        
     def reset(self):
-        TwoPlayerGame.reset(self)
-        self.board = []
-        for i in range(self.spaces):
-            self.board.append(0)
+        self.board = [0]*self.spaces
         self.winner = None
         self.blackScore = 0
         self.whiteScore = 0
+        self.blackTerritory = 0
+        self.whiteTerritory = 0
         self.passflag = False
-
+        self.lastCapture = 0
     def getSensors(self):
         output = ""
         for element in self.board:
@@ -95,23 +75,20 @@ class GoGame(TwoPlayerGame):
             output += [0, 0]
         return output
     def playGame(self, p1, p2):
-        gameover = False
         currplayer = 0 if p1.colour == self.BLACK else 1
         players = [p1, p2]
         p1.game = self
         p2.game = self
-        while not self.gameOver:
+        while not self.gameOver():
             player = players[currplayer]
-            if self.performAction(player.getAction()):
+            if self.doMove(player.getAction()):
                 currplayer = 1 - currplayer
-    
-    def doMove(self, *args):
-        #print args
+    def doMove(self, args):
         colour = args[0]
         move = args[1]
-        #print(self.board)
         if move == self.spaces:
             self.handlePass()
+            self.lastCapture = 0
             return True
         if not self.isLegal(colour, move):
             return False
@@ -122,15 +99,13 @@ class GoGame(TwoPlayerGame):
                 self.blackScore += scored
             else:
                 self.whiteScore += scored
-            self.passflag = False
+            self.lastCapture = scored
             return True
-    
     def handlePass(self):
         if self.passflag:
             self.calculateTerritory()
         else:
             self.passflag = True
-    
     def calculateTerritory(self):
         flag = True
         while flag:
@@ -201,20 +176,20 @@ class GoGame(TwoPlayerGame):
                             flag = True
         for i in range(self.spaces):
             if self.board[i] == self.BLACK_SAFE:
-                self.blackScore += 1
+                self.blackTerritory += 1
             if self.board[i] == self.WHITE_SAFE:
-                self.whiteScore += 1
-        if self.blackScore > self.whiteScore + self.komi:
+                self.whiteTerritory += 1
+        if self.blackScore + self.blackTerritory > self.whiteScore + self.whiteTerritory + self.komi:
             self.winner = self.BLACK
         else:
             self.winner = self.WHITE
-        """
+            """
         print("Game over. Black scores " + str(self.blackScore) + ", White scores " + str(self.whiteScore) + " plus a komi of " + str(self.komi) + ".")
         if self.winner == self.BLACK:
             print("Black wins")
         else:
             print("White wins")
-        """
+            """
     def checkCaptures(self, colour, move):
         flag = True
         tempboard = copy.copy(self.board)
@@ -345,182 +320,84 @@ class GoGame(TwoPlayerGame):
         return output
     def gameOver(self):
         return self.winner != None
+    
+    
+### PLAYERS ###
 
-# --------------------------
-# PLAYER CLASSES
-# --------------------------
-
-
-class GoPlayer(Agent):
-    def __init__(self, game, color = GoGame.BLACK, **args):
+class GoPlayer():
+    def __init__(self, game, colour = GoGame.BLACK):
         self.game = game
-        self.color = color
-        #self.setArgs(**args)
+        self.colour = colour
 class RandomGoPlayer(GoPlayer):
     def getAction(self):
-        return [self.color, random.choice(self.game.getLegals(self.color))]
-    
-class ModuleDecidingPlayer(RandomGoPlayer):
-    """ A Go player that plays according to the rules, but choosing its moves
-    according to the output of a module that takes as input the current state of the board. """
-    greedySelection = False
-    # if the selection is not greedy, use Gibbs-sampling with this temperature
-    temperature = 1.
-    def __init__(self, module, *args, **kwargs):
-        #RandomGoPlayer.__init__(self, *args, **kwargs)
+        return [self.colour, random.choice(self.game.getLegals(self.colour))]
+class ModuleGoPlayer(GoPlayer):
+    def __init__(self, game, module, colour = GoGame.BLACK, greedy = False):
+        self.temperature = 1.
+        self.game = game
+        self.colour = colour
         self.module = module
-        if self.greedySelection:
+        self.greedy = greedy
+        self.moves = []
+        if self.greedy:
             self.temperature = 0.
     def getAction(self):
-        """ get suggested action, return them if they are legal, otherwise choose randomly. """
-        ba = self.game.getBoardArray()
-        # network is given inputs with self/other as input, not black/white
-        if self.color != GoGame.BLACK:
-            # invert values
-            tmp = zeros(len(ba))
-            tmp[:len(ba)-1:2] = ba[1:len(ba):2]
-            tmp[1:len(ba):2] = ba[:len(ba)-1:2]
-            ba = tmp
-        self.module.reset()
-        return [self.color, self._legalizeIt(self.module.activate(ba))]
-    def newEpisode(self):
-        self.module.reset()
-    def _legalizeIt(self, a):
-        """ draw index from an array of values, filtering out illegal moves. """
-        if not min(a) >= 0:
-            #print a
-            #print min(a)
-            #print self.module.params
-            #print self.module.inputbuffer
-            #print self.module.outputbuffer
-            raise Exception('Non-positive value in array?')
-        legals = self.game.getLegals(self.color)
+        legals = self.game.getLegals(self.colour)
+        a = self.module.activate(self.game.getSensors())
+        """
         vals = ones(len(a))*(-100)*(1+self.temperature)
         for i in legals:
             vals[i] = a[i]
         drawn = drawGibbs(vals, self.temperature)
+        """
+        vals = zeros(len(a))
+        for i in legals:
+            vals[i] = a[i]
+        drawn = self.weightedPick(vals)
+        
+        #"""
         assert drawn in legals
-        return drawn
-    def integrateObservation(self, obs = None):
-        pass
-
-# ----------------------
-# TASK CLASS
-# ----------------------
-
-class GoGameTask(EpisodicTask, Named):
-    """ The task of winning the maximal number of Go games against a fixed opponent. """
-    # first game, opponent is black
-    opponentStart = True
-    # on subsequent games, starting players are alternating
-    alternateStarting = True
-    # numerical reward value attributed to winning
-    winnerReward = 1.
-    # average over some games for evaluations
-    averageOverGames = 25
-    noisy = True
-    def __init__(self, size, opponent = None, **args):
-        EpisodicTask.__init__(self, GoGame(size))
-        self.setArgs(**args)
-        if opponent == None:
-            opponent = RandomGoPlayer(self.env)
-        elif isclass(opponent):
-            # assume the agent can be initialized without arguments then.
-            opponent = opponent(self.env)
-        else:
-            opponent.game = self.env
-        if not self.opponentStart:
-            opponent.color = GoGame.WHITE
-        self.opponent = opponent
-        self.reset()
-    def reset(self):
-        self.switched = False
-        EpisodicTask.reset(self)
-        if self.opponent.color == GoGame.BLACK:
-            # first move by opponent
-            EpisodicTask.performAction(self, self.opponent.getAction())
-    def isFinished(self):
-        res = self.env.gameOver()
-        if res and self.alternateStarting and not self.switched:
-            # alternate starting player
-            self.opponent.color *= -1
-            self.switched = True
-        return res
-    def getReward(self):
-        """ Final positive reward for winner, negative for loser. """
-        if self.isFinished():
-            win = (self.env.winner != self.opponent.color)
-            res = self.winnerReward
-            if not win:
-                res *= -1
-            if self.alternateStarting and self.switched:
-                # opponent color has been inverted after the game!
-                res *= -1
-            return res
-        else:
-            return 0
-    def performAction(self, action):
-        EpisodicTask.performAction(self, action)
-        if not self.isFinished():
-            EpisodicTask.performAction(self, self.opponent.getAction())
-    def f(self, x):
-        """ If a module is given, wrap it into a ModuleDecidingAgent before evaluating it.
-        Also, if applicable, average the result over multiple games. """
-        if isinstance(x, Module):
-            agent = ModuleDecidingPlayer(x, self.env, greedySelection = True)
-        elif isinstance(x, GoPlayer):
-            agent = x
-        else:
-            raise NotImplementedError('Missing implementation for '+x.__class__.__name__+' evaluation')
-        res = 0
-        agent.game = self.env
-        self.opponent.game = self.env
-        for _ in range(self.averageOverGames):
-            agent.color = -self.opponent.color
-            x = EpisodicTask.f(self, agent)
-            res += x
-        return res / float(self.averageOverGames)
-
-# -----------------------------
-# ACTION VALUE TABLE CLASS
-# -----------------------------
+        self.moves.append([self.game.getSensors(), drawn, self.game.lastCapture])
+        return self.colour, drawn
+    def weightedPick(self, li):
+        d = {i: li[i] for i in range(len(li))}
+        r = random.uniform(0, sum(d.itervalues()))
+        s = 0.0
+        for k, w in d.iteritems():
+            s += w
+            if r < s: return k
+        return k
+    
+### MODULES ###
+        
+class Module():
+    def __init__(self, outsize):
+        self.size = outsize
+    def activate(self, state):
+        return [0]*self.size
 
 class GoActionValueTable(Module):
-    def __init__(self, numStates, numActions, name=None):
-        Module.__init__(self, numActions, 1, name)
-        self.numRows = numStates
-        self.numColumns = numActions
+    def __init__(self, outsize):
+        self.numColumns = outsize
         self.actionvalues = {}
+        self.initialize(0.)
             
-
     @property
     def numActions(self):
         return self.numColumns
 
-    def _forwardImplementation(self, inbuf, outbuf):
-        """ Take a vector of length 1 (the state coordinate) and return
-            the action with the maximum value over all actions for this state.
-        """
-        outbuf[0] = self.getMaxAction(inbuf[0])
-
-    def getMaxAction(self, state):
-        """ Return the action with the maximal value for the given state. """
+    def getActionValues(self, state):
         self._initState(state)
-        maxes = []
-        statelist = self.actionvalues[state]
-        max = -1.0
+        return self.actionvalues[state]
+        
+    def activate(self, state):
+        statelist = self.getActionValues(state)
+        max = -1.
         for i in range(self.numColumns):
             if statelist[i] > max:
                 maxes = []
                 max = statelist[i]
-            if statelist[i] == max:
-                maxes.append(i)
-        action = random.choice(maxes)
-        return action
-
-    def getActionValues(self, state):
-        self._initState(state)
-        return self.actionvalues[state]
+        return [element / max for element in statelist]
 
     def initialize(self, value=0.0):
         self.basestate = []
@@ -530,74 +407,78 @@ class GoActionValueTable(Module):
     def _initState(self, state):
         if not state in self.actionvalues:
             self.actionvalues[state] = copy.copy(self.basestate)
-
-# -----------------------------
-# PROVING IT WORKS HOPEFULLY
-# -----------------------------
-
-
-pylab.gray()
-pylab.ion()
-
-size = 3
-
-
-
-print("Starting")
-task = GoGameTask(size, averageOverGames = 200, opponent = RandomGoPlayer)
-
-# keep track of evaluations for plotting
-res = storeCallResults(task)
-
-from pybrain.tools.shortcuts import buildNetwork
-from pybrain import SigmoidLayer
-net = buildNetwork(task.outdim, task.indim, outclass = SigmoidLayer)
-
-net = CheaplyCopiable(net)
-print net.name, 'has', net.paramdim, 'trainable parameters.'
-
-learner = ES(task, net, mu = 5, lambada = 5,
-             verbose = True, evaluatorIsNoisy = True,
-             maxEvaluations = 2000, storeAllEvaluations = True)
-
-newnet, f = learner.learn()
-
-task = GoGameTask(size, averageOverGames = 200, opponent = RandomGoPlayer)
-
-game = GoGame(size)
-randAgent = RandomGoPlayer(game, name= "Random")
-netAgent = ModuleDecidingPlayer(newnet, game, name = 'net')
-netAgentGreedy = ModuleDecidingPlayer(newnet, game, name = 'greedy', greedySelection = True)
-
-agents = [randAgent, netAgent, netAgentGreedy]
-
-print
-print 'Starting tournament...'
-tourn = Tournament(game, agents)
-tourn.organize(50)
-print tourn
-
-print("Weights are as follows:")
-print net.activate([0,0]*((size*size)+1))
-
-
-"""
-task = GoGameTask(size, averageOverGames = 20, opponent = RandomGoPlayer)
-
-controller = GoActionValueTable(3**(size*size)*2, size*size + 1)
-#Initialize at 1 to encourage exploration
-controller.initialize(1.)
-
-learner = Q(task)
-agent = LearningAgent(controller, learner)
-experiment = EpisodicExperiment(task, agent)
-
-i=0
-while True:
-    i += 1
-    print(str(i) + "x")
-    experiment.doEpisodes(2)
-    agent.learn(2)
-    agent.reset()
-
-#"""
+            
+    def acceptReward(self, rewardlist):
+        rewards = []
+        for i in range(len(rewardlist)-1, -1, -1):
+            element = rewardlist[i]
+            curr = self.actionvalues[element[0]][element[1]]
+            r = 0.
+            rewards.insert(0, element[2])
+            for i in range(len(rewards)):
+                r = r + rewards[i] * pow(discount, i)
+            self.actionvalues[element[0]][element[1]] = curr + learning * (r - curr)
+        
+        
+        
+def basic():
+    size = 3
+    module = GoActionValueTable(size*size + 1)
+    module.initialize(1.)
+    scores = []
+    for i in range(100000):
+        task = GoGame(size)
+        if i % 2 == 0:
+            p1 = ModuleGoPlayer(task, module, colour = GoGame.BLACK, greedy = False)
+            p2 = RandomGoPlayer(task, colour = GoGame.WHITE)
+        else:
+            p1 = ModuleGoPlayer(task, module, colour = GoGame.WHITE, greedy = False)
+            p2 = RandomGoPlayer(task, colour = GoGame.BLACK)
+        task.playGame(p1, p2)
+        reward = 0
+        if (task.winner == p1.colour):
+            reward = 1
+        scores.append(reward)
+        for element in p1.moves:
+            element[2] = 0.
+        if len(p1.moves) > 0:
+            p1.moves[-1][2] = reward
+            module.acceptReward(p1.moves)
+    cPickle.dump( module.actionvalues, open( "actionvalue.table", "w" ) )
+    f = open("winrate.txt", "w")
+    for element in scores:
+        print(str(element), file=f)
+    f.close()
+    
+def scorebased():
+    size = 3
+    module = GoActionValueTable(size*size + 1)
+    module.initialize(1.)
+    scores = []
+    for i in range(10000):
+        task = GoGame(size)
+        if i % 2 == 0:
+            p1 = ModuleGoPlayer(task, module, colour = GoGame.BLACK, greedy = False)
+            p2 = RandomGoPlayer(task, colour = GoGame.WHITE)
+        else:
+            p1 = ModuleGoPlayer(task, module, colour = GoGame.WHITE, greedy = False)
+            p2 = RandomGoPlayer(task, colour = GoGame.BLACK)
+        task.playGame(p1, p2)
+        reward = 0
+        if (task.winner == p1.colour):
+            reward = 1
+        scores.append(reward)
+        for element in p1.moves:
+            element[2] = 0.
+        if len(p1.moves) > 0:
+            if p1.colour == GoGame.WHITE:
+                p1.moves[-1][2] = task.whiteTerritory
+            else:
+                p1.moves[-1][2] = task.blackTerritory
+            module.acceptReward(p1.moves)
+    cPickle.dump( module.actionvalues, open( "actionvalue.table", "w" ) )
+    f = open("winrate.txt", "w")
+    for element in scores:
+        print(str(element), file=f)
+    f.close()
+scorebased()

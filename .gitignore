@@ -89,3 +89,5 @@ ENV/
 .ropeproject
 
 *.golearn
+*.table
+*.txt

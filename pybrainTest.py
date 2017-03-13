@@ -47,7 +47,7 @@ class GoGame(TwoPlayerGame):
         self.reset()
         
     @property
-    def startcolor(self):
+    def startcolour(self):
         return self.BLACK
     @property
     def spaces(self):
@@ -95,16 +95,14 @@ class GoGame(TwoPlayerGame):
             output += [0, 0]
         return output
     def playGame(self, p1, p2):
-        gameover = False
         currplayer = 0 if p1.colour == self.BLACK else 1
         players = [p1, p2]
         p1.game = self
         p2.game = self
-        while not self.gameOver:
+        while not self.gameOver():
             player = players[currplayer]
             if self.performAction(player.getAction()):
                 currplayer = 1 - currplayer
-    
     def doMove(self, *args):
         #print args
         colour = args[0]
@@ -352,13 +350,13 @@ class GoGame(TwoPlayerGame):
 
 
 class GoPlayer(Agent):
-    def __init__(self, game, color = GoGame.BLACK, **args):
+    def __init__(self, game, colour = GoGame.BLACK, **args):
         self.game = game
-        self.color = color
-        #self.setArgs(**args)
+        self.colour = colour
+        self.setArgs(**args)
 class RandomGoPlayer(GoPlayer):
     def getAction(self):
-        return [self.color, random.choice(self.game.getLegals(self.color))]
+        return [self.colour, random.choice(self.game.getLegals(self.colour))]
     
 class ModuleDecidingPlayer(RandomGoPlayer):
     """ A Go player that plays according to the rules, but choosing its moves
@@ -367,7 +365,7 @@ class ModuleDecidingPlayer(RandomGoPlayer):
     # if the selection is not greedy, use Gibbs-sampling with this temperature
     temperature = 1.
     def __init__(self, module, *args, **kwargs):
-        #RandomGoPlayer.__init__(self, *args, **kwargs)
+        RandomGoPlayer.__init__(self, *args, **kwargs)
         self.module = module
         if self.greedySelection:
             self.temperature = 0.
@@ -375,14 +373,14 @@ class ModuleDecidingPlayer(RandomGoPlayer):
         """ get suggested action, return them if they are legal, otherwise choose randomly. """
         ba = self.game.getBoardArray()
         # network is given inputs with self/other as input, not black/white
-        if self.color != GoGame.BLACK:
+        if self.colour != GoGame.BLACK:
             # invert values
             tmp = zeros(len(ba))
             tmp[:len(ba)-1:2] = ba[1:len(ba):2]
             tmp[1:len(ba):2] = ba[:len(ba)-1:2]
             ba = tmp
         self.module.reset()
-        return [self.color, self._legalizeIt(self.module.activate(ba))]
+        return [self.colour, self._legalizeIt(self.module.activate(ba))]
     def newEpisode(self):
         self.module.reset()
     def _legalizeIt(self, a):
@@ -394,7 +392,7 @@ class ModuleDecidingPlayer(RandomGoPlayer):
             #print self.module.inputbuffer
             #print self.module.outputbuffer
             raise Exception('Non-positive value in array?')
-        legals = self.game.getLegals(self.color)
+        legals = self.game.getLegals(self.colour)
         vals = ones(len(a))*(-100)*(1+self.temperature)
         for i in legals:
             vals[i] = a[i]
@@ -430,31 +428,31 @@ class GoGameTask(EpisodicTask, Named):
         else:
             opponent.game = self.env
         if not self.opponentStart:
-            opponent.color = GoGame.WHITE
+            opponent.colour = GoGame.WHITE
         self.opponent = opponent
         self.reset()
     def reset(self):
         self.switched = False
         EpisodicTask.reset(self)
-        if self.opponent.color == GoGame.BLACK:
+        if self.opponent.colour == GoGame.BLACK:
             # first move by opponent
             EpisodicTask.performAction(self, self.opponent.getAction())
     def isFinished(self):
         res = self.env.gameOver()
         if res and self.alternateStarting and not self.switched:
             # alternate starting player
-            self.opponent.color *= -1
+            self.opponent.colour *= -1
             self.switched = True
         return res
     def getReward(self):
         """ Final positive reward for winner, negative for loser. """
         if self.isFinished():
-            win = (self.env.winner != self.opponent.color)
+            win = (self.env.winner != self.opponent.colour)
             res = self.winnerReward
             if not win:
                 res *= -1
             if self.alternateStarting and self.switched:
-                # opponent color has been inverted after the game!
+                # opponent colour has been inverted after the game!
                 res *= -1
             return res
         else:
@@ -476,7 +474,7 @@ class GoGameTask(EpisodicTask, Named):
         agent.game = self.env
         self.opponent.game = self.env
         for _ in range(self.averageOverGames):
-            agent.color = -self.opponent.color
+            agent.colour = -self.opponent.colour
             x = EpisodicTask.f(self, agent)
             res += x
         return res / float(self.averageOverGames)
@@ -542,62 +540,41 @@ pylab.ion()
 size = 3
 
 
+for i in range(10):
+    print("Starting")
+    print("Iteration " + str(i) + ":")
+    task = GoGameTask(size, averageOverGames = 100, opponent = RandomGoPlayer)
 
-print("Starting")
-task = GoGameTask(size, averageOverGames = 200, opponent = RandomGoPlayer)
+    # keep track of evaluations for plotting
+    res = storeCallResults(task)
 
-# keep track of evaluations for plotting
-res = storeCallResults(task)
+    from pybrain.tools.shortcuts import buildNetwork
+    from pybrain import SigmoidLayer
+    net = buildNetwork(task.outdim, task.indim, outclass = SigmoidLayer)
 
-from pybrain.tools.shortcuts import buildNetwork
-from pybrain import SigmoidLayer
-net = buildNetwork(task.outdim, task.indim, outclass = SigmoidLayer)
+    net = CheaplyCopiable(net)
+    print net.name, 'has', net.paramdim, 'trainable parameters.'
 
-net = CheaplyCopiable(net)
-print net.name, 'has', net.paramdim, 'trainable parameters.'
+    learner = ES(task, net, mu = 5, lambada = 5,
+                 verbose = True, evaluatorIsNoisy = True,
+                 maxEvaluations = 10000, storeAllEvaluations = True)
 
-learner = ES(task, net, mu = 5, lambada = 5,
-             verbose = True, evaluatorIsNoisy = True,
-             maxEvaluations = 2000, storeAllEvaluations = True)
+    newnet, f = learner.learn()
 
-newnet, f = learner.learn()
-
-task = GoGameTask(size, averageOverGames = 200, opponent = RandomGoPlayer)
-
-game = GoGame(size)
-randAgent = RandomGoPlayer(game, name= "Random")
-netAgent = ModuleDecidingPlayer(newnet, game, name = 'net')
-netAgentGreedy = ModuleDecidingPlayer(newnet, game, name = 'greedy', greedySelection = True)
-
-agents = [randAgent, netAgent, netAgentGreedy]
-
-print
-print 'Starting tournament...'
-tourn = Tournament(game, agents)
-tourn.organize(50)
-print tourn
-
-print("Weights are as follows:")
-print net.activate([0,0]*((size*size)+1))
-
-
-"""
-task = GoGameTask(size, averageOverGames = 20, opponent = RandomGoPlayer)
-
-controller = GoActionValueTable(3**(size*size)*2, size*size + 1)
-#Initialize at 1 to encourage exploration
-controller.initialize(1.)
-
-learner = Q(task)
-agent = LearningAgent(controller, learner)
-experiment = EpisodicExperiment(task, agent)
-
-i=0
-while True:
-    i += 1
-    print(str(i) + "x")
-    experiment.doEpisodes(2)
-    agent.learn(2)
-    agent.reset()
-
-#"""
+    game = GoGame(size = 3)
+    randAgent = RandomGoPlayer(game, name= "Random", colour = GoGame.WHITE)
+    netAgent = ModuleDecidingPlayer(newnet, game, name = 'net', colour = GoGame.BLACK)
+    netAgentGreedy = ModuleDecidingPlayer(newnet, game, name = 'greedy', greedySelection = True, colour = GoGame.BLACK)
+    wins = 0
+    winsgreedy = 0
+    for j in range(100):
+        game.playGame(netAgent, netAgent)
+        if game.winner == GoGame.BLACK:
+            wins = wins + 1
+        game.reset()
+        game.playGame(netAgentGreedy, netAgent)
+        if game.winner == GoGame.BLACK:
+            winsgreedy = winsgreedy + 1
+        game.reset()
+    print("Iteration " + str(i) + ": Wins = " + str(wins) + ", Greedy Wins = " + str(winsgreedy))
+    print(str(newnet.activate([0,0]*((size*size)+1))))

@@ -18,6 +18,6 @@ with open("winrate.txt") as fp:
 
 plt.xscale("log")
 plt.plot(winlist)
-plt.ylabel("Score based Q Learner Winrate over 10,000 episodes of training")
-plt.axis([0, 10000, -1, 1])
+plt.ylabel("Black winrate among 10 Q-Learner pool over " + str(len(winlist)) + " episodes")
+plt.axis([0, len(winlist), -1, 1])
 plt.show()

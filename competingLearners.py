@@ -26,7 +26,7 @@ class GoGame():
     WHITE_SAFE = -2
     DISPUTED_TERRITORY = 5
     
-    def __init__(self, size = 5, komi = 0.5):
+    def __init__(self, size = 3, komi = 0.5):
         self.size = size
         self.komi = komi
         self.reset()
@@ -51,10 +51,13 @@ class GoGame():
         self.whiteTerritory = 0
         self.passflag = False
         self.lastCapture = 0
-    def getSensors(self):
+    def getSensors(self, colour):
         output = ""
         for element in self.board:
-            output = output + str(element+self.BLACK)
+            if colour == self.BLACK:
+                output = output + str(element+self.BLACK)
+            else:
+                output = output + str(2 - (element+self.BLACK))
         if self.passflag:
             output = output + "1"
         else:
@@ -82,6 +85,7 @@ class GoGame():
         while not self.gameOver():
             player = players[currplayer]
             if self.doMove(player.getAction()):
+                player.logCapture(self.lastCapture)
                 currplayer = 1 - currplayer
     def doMove(self, args):
         colour = args[0]
@@ -328,6 +332,8 @@ class GoPlayer():
     def __init__(self, game, colour = GoGame.BLACK):
         self.game = game
         self.colour = colour
+    def logCapture(self, points):
+        pass
 class RandomGoPlayer(GoPlayer):
     def getAction(self):
         return [self.colour, random.choice(self.game.getLegals(self.colour))]
@@ -343,7 +349,7 @@ class ModuleGoPlayer(GoPlayer):
             self.temperature = 0.
     def getAction(self):
         legals = self.game.getLegals(self.colour)
-        a = self.module.activate(self.game.getSensors())
+        a = self.module.activate(self.game.getSensors(self.colour))
         """
         vals = ones(len(a))*(-100)*(1+self.temperature)
         for i in legals:
@@ -353,11 +359,20 @@ class ModuleGoPlayer(GoPlayer):
         vals = zeros(len(a))
         for i in legals:
             vals[i] = a[i]
-        drawn = self.weightedPick(vals)
-        
+            if vals[i] < 0.:
+                vals[i] = 0.
+        if not self.greedy:
+            drawn = self.weightedPick(vals)
+        else:
+            drawn = -1
+            max = -1.
+            for i in range(len(vals)):
+                if vals[i] > max:
+                    max = vals[i]
+                    drawn = i
         #"""
         assert drawn in legals
-        self.moves.append([self.game.getSensors(), drawn, self.game.lastCapture])
+        self.moves.append([self.game.getSensors(self.colour), drawn])
         return self.colour, drawn
     def weightedPick(self, li):
         d = {i: li[i] for i in range(len(li))}
@@ -367,6 +382,8 @@ class ModuleGoPlayer(GoPlayer):
             s += w
             if r < s: return k
         return k
+    def logCapture(self, points):
+        self.moves[-1].append(points)
     
 ### MODULES ###
         
@@ -392,12 +409,19 @@ class GoActionValueTable(Module):
         
     def activate(self, state):
         statelist = self.getActionValues(state)
+        min = 0
+        for i in range(self.numColumns):
+            if statelist[i] < min:
+                min = statelist[i]
+        statelist = [element + min for element in statelist]
         max = -1.
         for i in range(self.numColumns):
             if statelist[i] > max:
-                maxes = []
                 max = statelist[i]
-        return [element / max for element in statelist]
+        if max != 0:
+            return [element / max for element in statelist]
+        else:
+            return [element + 1 for element in statelist]
 
     def initialize(self, value=0.0):
         self.basestate = []
@@ -420,7 +444,118 @@ class GoActionValueTable(Module):
             self.actionvalues[element[0]][element[1]] = curr + learning * (r - curr)
         
         
-        
+def pool():
+    size = 3
+    module_pool = []
+    for i in range(10):
+        module_pool.append( GoActionValueTable(size*size + 1))
+        module_pool[i].initialize(1.)
+    scores = []
+    for i in range(100000):
+        task = GoGame(size)
+        p1 = ModuleGoPlayer(task, module_pool[i % 10], colour = GoGame.BLACK, greedy = False)
+        p2 = ModuleGoPlayer(task, module_pool[(i // 10) % 10], colour = GoGame.WHITE, greedy = False)
+        task.playGame(p1, p2)
+        reward = 0
+        if (task.winner == p1.colour):
+            reward = 1.
+        scores.append(reward)
+        for element in p1.moves:
+            element[2] = 0.
+        for element in p2.moves:
+            element[2] = 0.
+        p1.moves[-1][2] = reward
+        p2.moves[-1][2] = 1. - reward
+        p1.module.acceptReward(p1.moves)
+        p2.module.acceptReward(p2.moves)
+    for i in range(10):
+        cPickle.dump( module_pool[i].actionvalues, open( "actionvalue" + str(i) + ".table", "w" ) )
+    f = open("winrate.txt", "w")
+    for element in scores:
+        print(str(element), file=f)
+    f.close()
+    
+def selfrun(modifier = "", exp = 6, komi = 0.5):
+    size = 3
+    module = GoActionValueTable(size*size + 1)
+    module.initialize(1.)
+    scores = []
+    results = []
+    for i in range(pow(10, exp)):
+        task = GoGame(size, komi)
+        p1 = ModuleGoPlayer(task, module, colour = GoGame.BLACK, greedy = False)
+        p2 = ModuleGoPlayer(task, module, colour = GoGame.WHITE, greedy = False)
+        task.playGame(p1, p2)
+        reward = 0.
+        if (task.winner == None):
+            print("FAILOUT")
+            break
+        if (task.winner == p1.colour):
+            results.append("Black wins game " + str(i) + " in " + str(len(p1.moves) + len(p2.moves)) + " turns, with a score of " + str(task.blackTerritory + task.blackScore) + " to " + str(task.whiteTerritory + task.whiteScore + task.komi) + ".")
+            reward = 1.
+        else:
+            results.append("White wins game " + str(i) + " in " + str(len(p1.moves) + len(p2.moves)) + " turns, with a score of " + str(task.blackTerritory + task.blackScore) + " to " + str(task.whiteTerritory + task.whiteScore + task.komi) + ".")
+        scores.append(reward)
+        for element in p1.moves:
+            element[2] = 0.
+        for element in p2.moves:
+            element[2] = 0.
+        p1.moves[-1][2] = reward
+        p2.moves[-1][2] = 1. - reward
+        module.acceptReward(p1.moves)
+        module.acceptReward(p2.moves)
+    cPickle.dump( module.actionvalues, open( "actionvalueself" + modifier + ".table", "w" ) )
+    f = open("winrate" + modifier + ".txt", "w")
+    for element in scores:
+        print(str(element), file=f)
+    f.close()
+    f = open("results" + modifier + ".txt", "w")
+    for element in results:
+        print(str(element), file=f)
+    f.close()
+    return module
+
+def selfmargin(modifier = "", exp = 6):
+    size = 3
+    module = GoActionValueTable(size*size + 1)
+    module.initialize(1.)
+    scores = []
+    results = []
+    for i in range(pow(10, exp)):
+        task = GoGame(size)
+        p1 = ModuleGoPlayer(task, module, colour = GoGame.BLACK, greedy = False)
+        p2 = ModuleGoPlayer(task, module, colour = GoGame.WHITE, greedy = False)
+        task.playGame(p1, p2)
+        reward = 0.
+        if (task.winner == None):
+            print("FAILOUT")
+            break
+        if (task.winner == p1.colour):
+            results.append("Black wins game " + str(i) + " in " + str(len(p1.moves) + len(p2.moves)) + " turns, with a score of " + str(task.blackTerritory + task.blackScore) + " to " + str(task.whiteTerritory + task.whiteScore + task.komi) + ".")
+            reward = 1.
+        else:
+            results.append("White wins game " + str(i) + " in " + str(len(p1.moves) + len(p2.moves)) + " turns, with a score of " + str(task.blackTerritory + task.blackScore) + " to " + str(task.whiteTerritory + task.whiteScore + task.komi) + ".")
+        scores.append(reward)
+        for element in p1.moves:
+            element[2] = 0.
+        for element in p2.moves:
+            element[2] = 0.
+        p1.moves[-1][2] = task.blackTerritory + task.blackScore - task.whiteTerritory - task.whiteScore - task.komi
+        p2.moves[-1][2] = task.whiteTerritory + task.whiteScore - task.blackTerritory - task.blackScore + task.komi
+        module.acceptReward(p1.moves)
+        module.acceptReward(p2.moves)
+    cPickle.dump( module.actionvalues, open( "actionvaluemargin" + modifier + ".table", "w" ) )
+    f = open("winrate" + modifier + ".txt", "w")
+    for element in scores:
+        print(str(element), file=f)
+    f.close()
+    f = open("results" + modifier + ".txt", "w")
+    for element in results:
+        print(str(element), file=f)
+    f.close()
+    return module
+    
+    
 def basic():
     size = 3
     module = GoActionValueTable(size*size + 1)
@@ -438,24 +573,27 @@ def basic():
         reward = 0
         if (task.winner == p1.colour):
             reward = 1
-        scores.append(reward)
+        if (i%2 == 0):
+            scores.append(reward)
         for element in p1.moves:
             element[2] = 0.
-        if len(p1.moves) > 0:
-            p1.moves[-1][2] = reward
-            module.acceptReward(p1.moves)
-    cPickle.dump( module.actionvalues, open( "actionvalue.table", "w" ) )
+        p1.moves[-1][2] = reward
+        module.acceptReward(p1.moves)
+        if i % 10000 == 0:
+            print("Playing game " + str(i))
+    cPickle.dump( module.actionvalues, open( "actionvalue_basic.table", "w" ) )
     f = open("winrate.txt", "w")
     for element in scores:
         print(str(element), file=f)
     f.close()
     
-def scorebased():
+def margin():
     size = 3
     module = GoActionValueTable(size*size + 1)
     module.initialize(1.)
     scores = []
-    for i in range(10000):
+    i = 0
+    for i in range(1000000):
         task = GoGame(size)
         if i % 2 == 0:
             p1 = ModuleGoPlayer(task, module, colour = GoGame.BLACK, greedy = False)
@@ -472,13 +610,47 @@ def scorebased():
             element[2] = 0.
         if len(p1.moves) > 0:
             if p1.colour == GoGame.WHITE:
-                p1.moves[-1][2] = task.whiteTerritory
+                p1.moves[-1][2] = task.whiteTerritory + task.whiteScore - task.blackTerritory - task.blackScore
             else:
-                p1.moves[-1][2] = task.blackTerritory
+                p1.moves[-1][2] =  task.blackTerritory + task.blackScore - task.whiteTerritory - task.whiteScore
             module.acceptReward(p1.moves)
-    cPickle.dump( module.actionvalues, open( "actionvalue.table", "w" ) )
-    f = open("winrate.txt", "w")
+        if i % 10000 == 0:
+            print("Playing game " + str(i))
+    cPickle.dump( module.actionvalues, open( "actionvalue_margin.table", "w" ) )
+    f = open("winrate_margin.txt", "w")
     for element in scores:
         print(str(element), file=f)
     f.close()
-scorebased()
+    
+def assess(module = None, modifier = "", komi = 0.5):
+    size = 3
+    if module == None:
+        module = GoActionValueTable(size*size + 1)
+        module.initialize(1.)
+        module.actionvalues = cPickle.load( open( "actionvalue.table", "r" ) )
+    blackwins = 0
+    whitewins = 0
+    for i in range(1000):
+        task = GoGame(size, komi)
+        p1 = ModuleGoPlayer(task, module, colour = GoGame.BLACK, greedy = True)
+        p2 = RandomGoPlayer(task, colour = GoGame.WHITE)
+        task.playGame(p1, p2)
+        if task.winner == p1.colour:
+            blackwins = blackwins + 1
+    for i in range(1000):
+        task = GoGame(size, komi)
+        p1 = ModuleGoPlayer(task, module, colour = GoGame.WHITE, greedy = True)
+        p2 = RandomGoPlayer(task, colour = GoGame.BLACK)
+        task.playGame(p1, p2)
+        if task.winner == p1.colour:
+            whitewins = whitewins + 1
+    f = open("winrate" + modifier + ".txt", "w")
+    print(str(blackwins), file=f)
+    print(str(whitewins), file=f)
+    f.close()
+        
+    
+for i in range(-2, 11):
+    assess(selfrun(str(i) + "-5komihundredthousand", 5, i+0.5), str(i) + "-5komihundredthousand", i+0.5)
+for i in range(-2, 11):
+    assess(selfrun(str(i) + "-5komimillion", 6, i+0.5), str(i) + "-5komimillion", i+0.5)
